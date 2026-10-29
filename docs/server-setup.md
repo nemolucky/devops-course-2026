@@ -91,3 +91,39 @@ server {
 
 - Применение: `sudo nginx -t && sudo systemctl reload nginx` (только reload). HSTS не используется.
 - Межсетевой экран: порты 80 и 443 уже разрешены, новых правил не требуется.
+
+
+## 9. Контейнеризация
+
+- Docker Engine установлен из официального репозитория Docker (download.docker.com),
+  версия: 29.9.2. Пакеты: docker-ce, docker-ce-cli, containerd.io,
+  docker-buildx-plugin, docker-compose-plugin. Пакет docker.io не используется.
+- Участники группы docker: devops (`sudo usermod -aG docker devops`, затем новая
+  SSH-сессия). Участник группы docker фактически получает права root, поэтому
+  в группу включаются только учётные записи с правом sudo.
+- Проект расположен на сервере в `/home/devops/app` (имя проекта Compose: app),
+  доставляется с хоста: `rsync -avz --delete --exclude=.env app/ devops:app/`.
+- Файл переменных `/home/devops/app/.env`: права 600, владелец devops, создаётся
+  только на сервере из `.env.example` с паролем `openssl rand -hex 16`, в репозиторий
+  не добавляется.
+- Сервисы: db (postgres:16-alpine, контейнер app-db-1) и app (образ devops-app:1.0,
+  контейнер app-app-1). Сеть проекта: app_backend (bridge).
+- Публикуемые порты: приложение 127.0.0.1:5000 (только loopback), порт СУБД 5432
+  не публикуется.
+- Именованный том: app_db_data (данные PostgreSQL), сохраняется при
+  `docker compose down`, удаляется при `docker compose down -v`.
+- Запуск: `cd ~/app && docker compose up -d --build`.
+- Обратный прокси: в блок HTTPS `/etc/nginx/sites-available/devops-site` добавлено
+
+```nginx
+    location /app/ {
+        proxy_pass http://127.0.0.1:5000/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+```
+
+  Применение: `sudo nginx -t && sudo systemctl reload nginx`. Статический ресурс
+  (`location /`) сохранён.
