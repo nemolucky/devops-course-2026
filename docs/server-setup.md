@@ -127,3 +127,84 @@ server {
 
   Применение: `sudo nginx -t && sudo systemctl reload nginx`. Статический ресурс
   (`location /`) сохранён.
+## 10. Ansible
+
+Практическая работа №11 выполняется после возврата VM к снимку `01-clean-install`.
+Приведённые выше разделы описывают предыдущие работы; в текущей конфигурации
+SSH использует порт 22, Nginx обслуживает HTTP на порту 80, HTTPS не настраивается.
+
+### Узлы и расположение проекта
+
+- Управляющий узел: WSL 2 Ubuntu, пользователь `denis`.
+- Проект: `~/projects/devops/devops-course-2026/ansible` в файловой системе WSL.
+- Управляемый узел: VirtualBox VM `devops-vm`, Ubuntu Server 24.04 amd64.
+- Host-only IP: `192.168.56.102`, SSH-порт: `22`.
+- Все команды Ansible ниже выполняются из каталога `ansible/`.
+
+### Inventory и доступ
+
+- `inventory/bootstrap.ini`: первоначальный вход от `student` по паролю с sudo.
+- `inventory/prod.ini`: последующий вход от `devops` по ключу `~/.ssh/devops_vm`.
+- Открытый ключ берётся из `~/.ssh/devops_vm.pub` на управляющем узле.
+- Пользователь и ключ создаются до отключения парольной аутентификации.
+- Для учебной автоматизации devops получает `NOPASSWD:ALL`; это полный
+  административный доступ, поэтому закрытый ключ хранится вне репозитория.
+- `ansible.cfg` выбирает prod inventory и содержит `force_handlers = True`.
+
+### Роли
+
+- `base`: проверка платформы, базовые пакеты, зависимости `python3-debian`
+  и `python3-requests`, Docker Engine из официального репозитория.
+- `ssh`: пользователь devops, открытый ключ, sudoers, hardening SSH и UFW.
+- `nginx`: reverse proxy, отключение default site; handlers проверяют
+  `nginx -t` перед reload.
+- `app`: загрузка проверенного образа, запуск контейнера и проверка `/health`.
+
+### Версия приложения и сеть
+
+- Образ: `ghcr.io/nemolucky/devops-ci-app` (публичный GHCR-пакет).
+- Полный SHA: `9851e7074462ac93ad629ea71b227ca9f57802d0`.
+- Digest проверенного образа:
+  `sha256:98c1ee623b2d68cfd0c45bb16d0fcfdccf811a851afa7a06e25d74372f3c59c9`.
+- Имя контейнера: `devops-ci-app`.
+- Публикация порта: `127.0.0.1:5000:5000`, прямой внешний доступ исключён.
+- Nginx: `http://192.168.56.102/`, health: `http://192.168.56.102/health`.
+- Версия задаётся через `app_tag` в `group_vars/all.yml`, тег latest не используется.
+- На VM приложение не собирается: загружается готовый образ из CI работы №10.
+
+### Команды установки и запусков
+
+```bash
+cd ~/projects/devops/devops-course-2026
+ansible-galaxy collection install -r ansible/requirements.yml
+cd ansible
+ansible-playbook -i inventory/bootstrap.ini site.yml --syntax-check
+ansible-playbook site.yml --syntax-check
+
+# Первичная настройка: пароли вводятся интерактивно и не записываются в файлы.
+ansible-playbook -i inventory/bootstrap.ini site.yml --ask-pass --ask-become-pass
+
+# Последующие запуски: ключ и sudo без интерактивного ввода.
+ansible all -m ping
+ansible-playbook site.yml
+
+# Read-only аудит состояния.
+ansible-playbook verify.yml
+curl --fail http://192.168.56.102/health
+```
+
+Повторный запуск site.yml без drift и оба запуска verify.yml дают `changed=0`.
+Аудит проверяет эффективные настройки SSH, запущенный контейнер и health-ответ.
+Остановка контейнера обнаруживается аудитом, восстановление выполняется site.yml.
+
+### Инциденты и восстановление
+
+- Ручное удаление контейнера и изменение upstream Nginx на порт 5001 дают HTTP 502.
+  Запуск site.yml восстанавливает шаблон, контейнер и выполняет reload Nginx.
+- Несуществующий app_tag вызывает отказ загрузки до изменения контейнера:
+  прежний контейнер остаётся доступен. После возврата корректного SHA повторный
+  запуск завершается без изменений.
+- Во время работы возник отказ DNS, полученного VM через DHCP (`172.22.0.1`).
+  Доступ по IP сохранялся. Временно на NAT-интерфейсе заданы DNS командой
+  `sudo resolvectl dns enp0s3 1.1.1.1 8.8.8.8`; это настройка времени выполнения,
+  после перезапуска сети её следует проверить повторно.
