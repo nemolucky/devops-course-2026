@@ -1,0 +1,6 @@
+---
+app_image: "ghcr.io/nemolucky/devops-ci-app"
+app_tag: "9851e7074462ac93ad629ea71b227ca9f57802d0"
+app_container_name: "devops-ci-app"
+app_host_port: 5000
+app_internal_port: 5000
